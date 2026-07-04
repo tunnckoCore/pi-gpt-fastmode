@@ -3,15 +3,19 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import fastModeExtension, {
+  CONFIG_FIELD,
   DEFAULT_SHORTCUT,
   FAST_SERVICE_TIER,
   KEYBINDING_FIELD,
   RESERVED_SHORTCUTS,
   TARGET_MODEL,
   TARGET_PROVIDER,
+  loadDefaultEnabled,
   loadShortcuts,
   normalizeShortcutSetting,
   resolveKeybindingsPath,
+  resolvePiFilePath,
+  resolveSettingsPath,
   shouldApplyFastMode,
   withFastServiceTier,
 } from "../src/index.ts";
@@ -69,10 +73,16 @@ afterEach(() => {
   else process.env.XDG_CONFIG_HOME = previousXdg;
 });
 
-test("patches only GPT-5.5 Codex payloads", () => {
+test("patches only supported GPT payloads", () => {
   expect(shouldApplyFastMode({ provider: TARGET_PROVIDER, id: TARGET_MODEL }, { model: TARGET_MODEL })).toBe(true);
-  expect(shouldApplyFastMode({ provider: "openai", id: TARGET_MODEL }, { model: TARGET_MODEL })).toBe(false);
-  expect(shouldApplyFastMode({ provider: TARGET_PROVIDER, id: "gpt-5.4" }, { model: "gpt-5.4" })).toBe(false);
+  expect(shouldApplyFastMode({ provider: "openai", id: TARGET_MODEL }, { model: TARGET_MODEL })).toBe(true);
+  expect(shouldApplyFastMode({ provider: TARGET_PROVIDER, id: "gpt-5.4" }, { model: "gpt-5.4" })).toBe(true);
+  expect(shouldApplyFastMode({ provider: TARGET_PROVIDER, id: "gpt-5.4-mini" }, { model: "gpt-5.4-mini" })).toBe(
+    true,
+  );
+  expect(shouldApplyFastMode({ provider: "openai", id: "gpt-5.4-mini" }, { model: "gpt-5.4-mini" })).toBe(true);
+  expect(shouldApplyFastMode({ provider: "openai", id: "gpt-5.4-nano" }, { model: "gpt-5.4-nano" })).toBe(false);
+  expect(shouldApplyFastMode({ provider: TARGET_PROVIDER, id: "gpt-5.4" }, { model: TARGET_MODEL })).toBe(false);
   expect(withFastServiceTier({ model: TARGET_MODEL, input: [] })).toEqual({
     model: TARGET_MODEL,
     input: [],
@@ -94,21 +104,24 @@ test("normalizes shortcut settings", () => {
   expect(normalizeShortcutSetting(null)).toEqual([]);
 });
 
-test("resolves Pi keybindings path from env, XDG, then default", () => {
+test("resolves Pi config file paths from env, XDG, then default", () => {
+  expect(resolvePiFilePath("settings.json", { env: { PI_CODING_AGENT_DIR: "~/pi-env" }, home: "/home/test" })).toBe(
+    "/home/test/pi-env/settings.json",
+  );
   expect(resolveKeybindingsPath({ env: { PI_CODING_AGENT_DIR: "~/pi-env" }, home: "/home/test" })).toBe(
     "/home/test/pi-env/keybindings.json",
   );
 
   expect(
-    resolveKeybindingsPath({
+    resolveSettingsPath({
       env: { XDG_CONFIG_HOME: "/xdg" },
       home: "/home/test",
-      exists: (path) => path === "/xdg/pi/agent/keybindings.json",
+      exists: (path) => path === "/xdg/pi/agent/settings.json",
     }),
-  ).toBe("/xdg/pi/agent/keybindings.json");
+  ).toBe("/xdg/pi/agent/settings.json");
 
-  expect(resolveKeybindingsPath({ env: {}, home: "/home/test", exists: () => false })).toBe(
-    "/home/test/.pi/agent/keybindings.json",
+  expect(resolveSettingsPath({ env: {}, home: "/home/test", exists: () => false })).toBe(
+    "/home/test/.pi/agent/settings.json",
   );
 });
 
@@ -118,12 +131,18 @@ test("loads configured shortcuts and toggles payload patching", async () => {
   try {
     const envDir = join(tempDir, "agent");
     mkdirSync(envDir, { recursive: true });
-    writeFileSync(join(envDir, "keybindings.json"), JSON.stringify({ [KEYBINDING_FIELD]: "ctrl+alt+m" }), "utf8");
+    writeFileSync(join(envDir, "keybindings.json"), JSON.stringify({ [KEYBINDING_FIELD]: ["ctrl+alt+m"] }), "utf8");
+    writeFileSync(join(envDir, "settings.json"), JSON.stringify({ [CONFIG_FIELD]: { enabled: true } }), "utf8");
 
     expect(loadShortcuts({ env: { PI_CODING_AGENT_DIR: envDir }, home: tempDir })).toEqual(["ctrl+alt+m"]);
     expect(loadShortcuts({ env: { PI_CODING_AGENT_DIR: join(tempDir, "missing") }, home: tempDir })).toEqual([
       DEFAULT_SHORTCUT,
     ]);
+    expect(loadDefaultEnabled({ env: { PI_CODING_AGENT_DIR: envDir }, home: tempDir })).toBe(true);
+    writeFileSync(join(envDir, "settings.json"), JSON.stringify({ [CONFIG_FIELD]: { enabled: false } }), "utf8");
+    expect(loadDefaultEnabled({ env: { PI_CODING_AGENT_DIR: envDir }, home: tempDir })).toBe(false);
+    writeFileSync(join(envDir, "settings.json"), JSON.stringify({ [CONFIG_FIELD]: { enabled: true } }), "utf8");
+    expect(loadDefaultEnabled({ env: { PI_CODING_AGENT_DIR: join(tempDir, "missing") }, home: tempDir })).toBe(false);
 
     process.env.PI_CODING_AGENT_DIR = envDir;
     delete process.env.XDG_CONFIG_HOME;
@@ -134,14 +153,12 @@ test("loads configured shortcuts and toggles payload patching", async () => {
     expect(pi.commands.has("fast")).toBe(true);
     expect(pi.shortcuts.has("ctrl+alt+m")).toBe(true);
     expect(pi.handlers.has("before_provider_request")).toBe(true);
+    expect(pi.handlers.has("session_start")).toBe(true);
 
     const ctx = createCtx();
     const payloadHook = pi.handlers.get("before_provider_request")!;
+    const sessionStart = pi.handlers.get("session_start")!;
 
-    expect(payloadHook({ payload: { model: TARGET_MODEL } }, ctx)).toBeUndefined();
-
-    await pi.commands.get("fast")!.handler("", ctx);
-    expect(ctx.notifications.at(-1)?.message).toMatch(/enabled/);
     expect(payloadHook({ payload: { model: TARGET_MODEL, store: false } }, ctx)).toEqual({
       model: TARGET_MODEL,
       store: false,
@@ -152,9 +169,28 @@ test("loads configured shortcuts and toggles payload patching", async () => {
     expect(ctx.notifications.at(-1)?.message).toMatch(/disabled/);
     expect(payloadHook({ payload: { model: TARGET_MODEL } }, ctx)).toBeUndefined();
 
-    const unsupportedCtx = createCtx({ provider: "openai", id: TARGET_MODEL });
+    sessionStart({}, ctx);
+    expect(payloadHook({ payload: { model: TARGET_MODEL, store: false } }, ctx)).toEqual({
+      model: TARGET_MODEL,
+      store: false,
+      service_tier: FAST_SERVICE_TIER,
+    });
+
+    await pi.commands.get("fast")!.handler("", ctx);
+    expect(ctx.notifications.at(-1)?.message).toMatch(/disabled/);
+
+    await pi.commands.get("fast")!.handler("", ctx);
+    expect(ctx.notifications.at(-1)?.message).toMatch(/enabled/);
+    expect(payloadHook({ payload: { model: TARGET_MODEL, store: false } }, ctx)).toEqual({
+      model: TARGET_MODEL,
+      store: false,
+      service_tier: FAST_SERVICE_TIER,
+    });
+
+    await pi.commands.get("fast")!.handler("", ctx);
+    const unsupportedCtx = createCtx({ provider: "anthropic", id: "claude-opus-4-8" });
     await pi.shortcuts.get("ctrl+alt+m")!.handler(unsupportedCtx);
-    expect(payloadHook({ payload: { model: TARGET_MODEL } }, unsupportedCtx)).toBeUndefined();
+    expect(payloadHook({ payload: { model: "claude-opus-4-8" } }, unsupportedCtx)).toBeUndefined();
     expect(unsupportedCtx.notifications.at(-1)?.level).toBe("warning");
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
