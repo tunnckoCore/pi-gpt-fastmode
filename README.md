@@ -1,6 +1,6 @@
-# pi-gpt-fastmode
+# @tunnckocore/pi-gpt-fast-mode
 
-Fast mode for GPT-5.5 in Pi. No ceremony.
+Fast mode for GPT-5.5 in Pi - one file, 180 LoC, easy to review. No ceremony.
 
 This package adds one command:
 
@@ -51,6 +51,12 @@ Or from a local checkout:
 
 ```bash
 pi -e ./pi-gpt-fastmode
+```
+
+or npm
+
+```bash
+pi install npm:@tunnckocore/pi-gpt-fast-mode
 ```
 
 ## Use
