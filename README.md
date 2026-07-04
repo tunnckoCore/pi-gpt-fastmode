@@ -73,23 +73,36 @@ Toggle it off the same way:
 /fast
 ```
 
-## Shortcut
+## Keybinding setting
 
-The extension registers this shortcut:
+The default shortcut is `ctrl+m`.
 
-```text
-ctrl+alt+f
+To change it, add this field to Pi's global keybindings file:
+
+```json
+{
+  "pi-gpt-fastmode": "ctrl+m"
+}
 ```
 
-That one is a cleaner bet than `ctrl+m`.
+You can also use an array:
 
-`ctrl+m` looks free until the terminal reminds you it is usually just `Enter` wearing a fake mustache. Do not build your workflow on it.
+```json
+{
+  "pi-gpt-fastmode": ["ctrl+m", "ctrl+alt+m"]
+}
+```
 
-Other decent candidates if you want to edit the extension later:
+Set it to `false` or `null` to disable the shortcut.
 
-- `ctrl+x` — mostly free in Pi's main editor, but has old Emacs baggage.
-- `ctrl+alt+m` — memorable, less likely to collide.
-- `ctrl+shift+f` — nice on paper, but some terminals steal it for search.
+The extension looks for that file in this order:
+
+1. `$PI_CODING_AGENT_DIR/keybindings.json`
+2. `$XDG_CONFIG_HOME/pi/agent/keybindings.json`
+3. `$XDG_CONFIG_HOME/pi/keybindings.json`
+4. `~/.pi/agent/keybindings.json`
+
+If `XDG_CONFIG_HOME` is unset, it tries `~/.config` for the XDG paths.
 
 ## Caveats
 
@@ -111,6 +124,6 @@ The tests mock the Pi extension API and check the only things worth checking her
 - `/fast` turns it on
 - `/fast` turns it off
 - only `openai-codex/gpt-5.5` gets patched
-- the shortcut is registered
+- keybinding config is loaded
 
 No fake testing theater. Just enough net under the wire.
