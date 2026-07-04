@@ -17,8 +17,6 @@ import fastModeExtension, {
 
 type MockCtx = ReturnType<typeof createCtx>;
 
-type MockPi = ReturnType<typeof createMockPi>;
-
 function createMockPi() {
   const commands = new Map<string, { handler: (args: string, ctx: MockCtx) => Promise<void> | void }>();
   const shortcuts = new Map<string, { handler: (ctx: MockCtx) => Promise<void> | void }>();
